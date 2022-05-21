@@ -135,3 +135,132 @@ INSERT INTO Price values ('8', '1300');
 INSERT INTO Price values ('9', '1570');
 INSERT INTO Price values ('10', '1240');
 
+
+SELECT avg(child_age)
+FROM Child;
+
+INSERT INTO Parent VALUES ('11', 'Menchuk Vsevolod', '27', '89117652091');
+INSERT INTO Child VALUES ('16', 'Menchuk Agata', '1', '1', '11'), ('17', 'Menchuk Oleg', '3', '2', '11');
+
+UPDATE Child
+SET child_group = CASE
+    WHEN child_group = 1
+    THEN child_group = 0
+    WHEN child_group = 2
+    THEN child_group = 1
+    WHEN child_group = 3
+    THEN child_group = 2
+    END;
+
+UPDATE Group_
+SET group_id = group_id - 1;
+
+DELETE FROM Child
+WHERE parent_id = (
+    SELECT parent_id
+    FROM Parent
+    WHERE parent_age = 35
+);
+
+DELETE FROM Parent
+WHERE parent_age = 35;
+
+SELECT avg(child_age)
+FROM Child
+WHERE child_group = 2;
+
+SELECT max(parent_age), min(parent_age)
+FROM Parent;
+
+SELECT child_name
+FROM Child
+WHERE child_group = (
+    SELECT group_id
+    FROM Group_
+    WHERE group_name = 'Ejevika' OR group_name = 'Klubnika'
+);
+
+
+--В результате выполнения запроса 1 будут получены имена родителей, у которых хотя бы 2 ребенка
+SELECT parent_name
+FROM Parent INNER JOIN Child on Parent.parent_id = Child.parent_id
+GROUP BY parent_id
+HAVING count(child_id) >= 2;
+
+--В результате выполнения запроса 2 будут получены группы в порядке убывания среднего возраста детей в них
+SELECT group_name
+FROM Group_ INNER JOIN Child on Group_.group_id = Child.child_group
+GROUP BY group_id
+ORDER BY avg(child_age) DESC;
+
+--В результате выполнения запроса 3 найдем у каких групп воспитательницей была Хлебникова Марина Олеговна
+SELECT group_name
+FROM Group_ INNER JOIN Educator_Group USING(group_id) INNER JOIN Educator USING (educator_id)
+GROUP BY educator_name
+HAVING educator_name = 'Hlebnikova Marina Olegovna';
+
+--В результате выполнения запроса 4 можно сравнить возраст ребенка со средним возрастом детей по каждой группе
+SELECT child_group,
+       child_name,
+       child_age,
+       avg(child_age) OVER (PARTITION BY child_group)
+FROM Child;
+
+--В результате выполнения запроса 5 в порядке возрастания выведется id подарков по стоимости
+SELECT gift_id OVER (ORDER BY sum(price_amt))
+FROM NewYearGift FULL OUTER JOIN Price ON Price.present_id = NewYearGift.chocolate_id
+                                        OR Price.present_id = NewYearGift.sweet_id
+                                        OR Price.present_id = NewYearGift.toy_id A
+GROUP BY NewYearGift.gift_id;
+
+--В результате выполнения запроса 6 находим для каждого воспитателя у группы предыдущего
+SELECT group_id, educator_id, LAG(educator_id) OVER(PARTITION BY group_id ORDER BY start_dt) AS previous
+FROM Educator_Group;
+
+
+--Индексы ускоряют процессы поиска и JOIN. child_id, group_id чаще всего будет встречаться в запросах, поэтому будет удобно проиндексировать их
+CREATE INDEX children ON Child(child_id);
+CREATE INDEX groups_ ON GROUP_(group_id);
+
+--Функция возвращает id воспитателя по имени
+CREATE FUNCTION educators_id(name_ varchar) RETURNS integer AS $$
+    BEGIN
+        IF (SELECT count(*) FROM Educator WHERE educator_name = name_) = 0 THEN
+            INSERT INTO Educator (educator_name) VALUES (name_);
+        END IF;
+        RETURN (SELECT DISTINCT educator_id FROM Educator WHERE educator_name = name_);
+    END;
+$$ LANGUAGE plpgsql;
+
+--Функция возвращает id ребенка по имени
+CREATE FUNCTION childs_id(name_ varchar) RETURNS integer AS $$
+    BEGIN
+        IF (SELECT count(*) FROM Child WHERE child_name = name_) = 0 THEN
+            INSERT INTO Child (child_name) VALUES (name_);
+        END IF;
+        RETURN (SELECT DISTINCT child_id FROM Child WHERE child_name = name_);
+    END;
+$$ LANGUAGE plpgsql;
+
+--Представление воспитателей для каждой конкретной группы
+CREATE VIEW groups_view AS SELECT group_name, string_agg(educator_name, ', ' ORDER BY educator_name)
+FROM Group_ INNER JOIN Educator ON Group_.educator_id = Educator.educator_id
+GROUP BY group_name
+
+--Представление родителей с их детьми по возрасту детей
+CREATE VIEW parents_view AS SELECT parent_name, parent_age, child_name, child_age, parent_tel_num
+FROM Parent INNER JOIN Child on Parent.parent_id = Child.parent_id
+ORDER BY child_age;
+
+--Представление расписания группы, ответственного на новогодние утренники
+CREATE VIEW timetable_view AS SELECT celebration_dttm, audience_num, group_name, educator_name, educator_tel_num
+FROM Timetable INNER JOIN Group_ USING(group_id)  INNER JOIN Educator USING(educator_id) INNER JOIN Child C2 on Group_.group_id = C2.child_group
+GROUP BY celebration_dttm, audience_num
+
+
+--Маскирование номера телефонов родителей
+UPDATE Parent SET parent_tel_num = CONCAT('89****', substring(parent_tel_num from 9 for 2));
+
+--Маскирование аудитории проведения празднования
+UPDATE Timetable SET audience_num = substring(audience_num from 0 for 3) || '***';
+
